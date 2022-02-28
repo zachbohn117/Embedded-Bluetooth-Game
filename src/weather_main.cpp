@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include "EGR425_Phase1_weather_bitmap_images.h"
 #include "WiFi.h"
+#include <NTPClient.h>
 
 ////////////////////////////////////////////////////////////////////
 // Variables
@@ -12,13 +13,20 @@ String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
 String apiKey = "5f6aefe3a8c1ddca7cb7e48c2e23d4d9";
 
 // TODO 1: WiFi variables
-String wifiNetworkName = "CBU-LancerArmsEast";
+String wifiNetworkName = "CBU";
 String wifiPassword = "";
 
-// Time variables
+// Time limit variables
 unsigned long lastTime = 0;
 unsigned long timerDelay = 5000;  // 5000; 5 minutes (300,000ms) or 5 seconds (5,000ms)
 signed long btnAClicks = 0;
+
+// Set up time components
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
+
+// Actual time variables
+String formattedDate;
 
 // LCD variables
 int sWidth;
@@ -50,6 +58,10 @@ void setup() {
     }
     Serial.print("\n\nConnected to WiFi network with IP address: ");
     Serial.println(WiFi.localIP());
+
+    // set up time zone
+    timeClient.begin();
+    timeClient.setTimeOffset(-28800);
 }
 
 ///////////////////////////////////////////////////////////////
@@ -68,11 +80,18 @@ void loop() {
     if ((millis() - lastTime) > timerDelay) {
         if (WiFi.status() == WL_CONNECTED) {
 
+            // get time now
+            timeClient.update();
+            formattedDate = timeClient.getFormattedTime();
+            int hours = (timeClient.getHours() < 13) ? timeClient.getHours() : timeClient.getHours() - 12;
+            int min = timeClient.getMinutes();
+            int seconds = timeClient.getSeconds();
+            
             //////////////////////////////////////////////////////////////////
             // TODO 4: Hardcode the specific city,state,country into the query
             // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
             //////////////////////////////////////////////////////////////////
-            String serverURL = urlOpenWeather + "q=indio,ca,usa&units=imperial&appid=" + apiKey;
+            String serverURL = urlOpenWeather + "q=Kleinfeltersville,pa,usa&units=imperial&appid=" + apiKey;
             //Serial.println(serverURL); // Debug print
 
             //////////////////////////////////////////////////////////////////
@@ -198,9 +217,39 @@ void loop() {
                 M5.Lcd.printf("LO:%0.fC\n", tempMaxC);    
             }
 
+            int cityTextSize = cityName.length() < 20 ? 3 : 2; 
+            M5.Lcd.setTextSize(cityTextSize);
             M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
             M5.Lcd.setTextColor(primaryTextColor);
             M5.Lcd.printf("%s\n", cityName.c_str());
+
+            M5.Lcd.setTextSize(3);
+            M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+            M5.Lcd.setTextColor(primaryTextColor);
+            M5.Lcd.printf("%d:%d:%d", hours, min, seconds);
+
+
+            // setting buttons
+
+            // degrees button switch
+            M5.Lcd.setTextSize(2);
+            M5.Lcd.setCursor(pad + 10, M5.Lcd.getCursorY() + 70);
+            M5.Lcd.setTextColor(primaryTextColor);
+            if (btnAClicks % 2 == 0) {
+                M5.Lcd.printf("Celsius");
+            } else {
+                M5.Lcd.printf("Fahrenheit");    
+            }
+
+            M5.Lcd.setCursor(pad + 40, M5.Lcd.getCursorY() + 70);
+            M5.Lcd.setTextColor(primaryTextColor);
+            M5.Lcd.printf("Set Zip Code");
+            // if (btnAClicks % 2 == 0) {
+            //     M5.Lcd.printf("Set Zip Code");
+            // } else {
+            //     M5.Lcd.printf("Fahrenheit");    
+            // }
+
         } else {
             Serial.println("WiFi Disconnected");
         }
@@ -290,9 +339,6 @@ void drawWeatherImage(String iconId, int resizeMult) {
     }
 }
 
-double Celcius(double farenhiet) {
-    return (farenhiet - 32) * 5/9;
-}
 //////////////////////////////////////////////////////////////////////////////////
 // For more documentation see the following links:
 // https://github.com/m5stack/m5-docs/blob/master/docs/en/api/
