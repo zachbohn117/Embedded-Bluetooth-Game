@@ -217,7 +217,7 @@ void loop() {
                 M5.Lcd.printf("LO:%0.fC\n", tempMaxC);    
             }
 
-            int cityTextSize = cityName.length() < 20 ? 3 : 2; 
+            int cityTextSize = (cityName.length() < 15) ? 3 : 2; 
             M5.Lcd.setTextSize(cityTextSize);
             M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
             M5.Lcd.setTextColor(primaryTextColor);
@@ -233,7 +233,7 @@ void loop() {
 
             // degrees button switch
             M5.Lcd.setTextSize(2);
-            M5.Lcd.setCursor(pad + 10, M5.Lcd.getCursorY() + 70);
+            M5.Lcd.setCursor(pad + 5, M5.Lcd.getCursorY() + 80);
             M5.Lcd.setTextColor(primaryTextColor);
             if (btnAClicks % 2 == 0) {
                 M5.Lcd.printf("Celsius");
@@ -241,9 +241,9 @@ void loop() {
                 M5.Lcd.printf("Fahrenheit");    
             }
 
-            M5.Lcd.setCursor(pad + 40, M5.Lcd.getCursorY() + 70);
+            M5.Lcd.setCursor(220, M5.Lcd.getCursorY());
             M5.Lcd.setTextColor(primaryTextColor);
-            M5.Lcd.printf("Set Zip Code");
+            M5.Lcd.printf("Zip Code");
             // if (btnAClicks % 2 == 0) {
             //     M5.Lcd.printf("Set Zip Code");
             // } else {
