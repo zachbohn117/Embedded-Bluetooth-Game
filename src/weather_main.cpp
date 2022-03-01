@@ -38,16 +38,6 @@ int zipCode[5] = {9, 2, 5, 0, 4}; // default Riverside, CA
 Button zipButtons[10] = {Button(0, 0, 50, 50), Button(65, 0, 50, 50), Button(130, 0, 50, 50), Button(195, 0, 50, 50), Button(260, 0, 50, 50),
                          Button(0, 150, 50, 50), Button(65, 150, 50, 50), Button(130, 150, 50, 50), Button(195, 150, 50, 50), Button(260, 150, 50, 50)};
 
-/*
-{Button(0,0,50,50), Button(65, 0, 50, 50), Button(130, 0, 50, 50), Button(195, 0, 50, 50), Button(260, 0, 50, 50),
-                    Button(0,150,50,50), Button(65, 150, 50, 50), Button(130, 150, 50, 50), Button(195, 150, 50, 50), Button(260, 150, 50, 50)}
-{Button(0, 0, 50, 50), Button(0, 150, 50, 50),      // Digit 1
-                         Button(65, 0, 50, 50), Button(65, 150, 50, 50),    // Digit 2
-                         Button(130, 0, 50, 50), Button(130, 150, 50, 50),  // Digit 3
-                         Button(195, 0, 50, 50), Button(195, 150, 50, 50),  // Digit 4
-                         Button(260, 0, 50, 50), Button(260, 150, 50, 50)}; // Digit 5
-*/
-
 ////////////////////////////////////////////////////////////////////
 // Method header declarations
 ////////////////////////////////////////////////////////////////////
@@ -93,7 +83,7 @@ void setup()
 void loop()
 {
     M5.update();
-    
+
     // Changes between Farenheit and Celsius
     if (M5.BtnA.wasPressed())
     {
@@ -102,7 +92,7 @@ void loop()
         drawMainScreen();
     }
 
-    //Changes between Weather and ZIP screens
+    // Changes between Weather and ZIP screens
     if (M5.BtnC.wasPressed())
     {
         btnCClicks++;
