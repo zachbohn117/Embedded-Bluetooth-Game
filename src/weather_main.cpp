@@ -13,7 +13,7 @@ String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
 String apiKey = "5f6aefe3a8c1ddca7cb7e48c2e23d4d9";
 
 // TODO 1: WiFi variables
-String wifiNetworkName = "CBU-LancerArmsEast";
+String wifiNetworkName = "CBU";
 String wifiPassword = "";
 
 // Time limit variables
