@@ -4,10 +4,28 @@
 #include <NTPClient.h>
 #include "EGR425_Phase1_weather_bitmap_images.h"
 #include "WiFi.h"
+#include "../include/I2C_RW.h"
+
+///////////////////////////////////////////////////////////////
+// Register definitions
+///////////////////////////////////////////////////////////////
+#define VCNL_I2C_ADDRESS 0x60
+#define VCNL_REG_PROX_DATA 0x08
+#define VCNL_REG_ALS_DATA 0x09
+#define VCNL_REG_WHITE_DATA 0x0A
+
+#define VCNL_REG_PS_CONFIG 0x03
+#define VCNL_REG_ALS_CONFIG 0x00
+#define VCNL_REG_WHITE_CONFIG 0x04
 
 ////////////////////////////////////////////////////////////////////
 // Variables
 ////////////////////////////////////////////////////////////////////
+
+// I2C Pins
+int const PIN_SDA = 32;
+int const PIN_SCL = 33;
+
 // TODO 3: Register for openweather account and get API key
 String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
 String apiKey = "5f6aefe3a8c1ddca7cb7e48c2e23d4d9";
@@ -19,15 +37,21 @@ String wifiPassword = "";
 // Time limit variables
 unsigned long lastTime = 0;
 unsigned long timerDelay = 5000; // 5000; 5 minutes (300,000ms) or 5 seconds (5,000ms)
-signed long btnAClicks = 0;
-signed long btnCClicks = 0;
+
+// Button Variables
+bool btnAClicked = false;
+char screenState = 'A';
 
 // Set up time components
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
-// Actual time variables
+// Weather screen variables
 String formattedDate;
+String apiResponse;
+int hours;
+int minutes;
+int seconds;
 
 // LCD variables
 int sWidth;
@@ -41,13 +65,13 @@ Button zipButtons[10] = {Button(0, 0, 50, 50), Button(65, 0, 50, 50), Button(130
 ////////////////////////////////////////////////////////////////////
 // Method header declarations
 ////////////////////////////////////////////////////////////////////
-String
-httpGETRequest(const char *serverName);
-String zipString();
+String httpGETRequest(const char *serverName);
 void drawWeatherImage(String iconId, int resizeMult);
-void drawMainScreen();
+void makeApiRequest();
+void drawWeatherScreen();
+// void drawHumidityScreen();
 void drawZipcodeScreen();
-void drawZipcode(int32_t x, int i);
+void drawButtonLabels(uint16_t textColor);
 
 ///////////////////////////////////////////////////////////////
 // Put your setup code here, to run once
@@ -56,6 +80,12 @@ void setup()
 {
     // Initialize the device
     M5.begin();
+    I2C_RW::initI2C(0x44, 400000, 32, 33, true);
+
+    // Connect to VCNL sensor
+    I2C_RW::initI2C(VCNL_I2C_ADDRESS, 400000, PIN_SDA, PIN_SCL, false);
+    I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_PS_CONFIG, 2, 0x0800, " to enable proximity sensor", true);
+    I2C_RW::writeReg8Addr16DataWithProof(VCNL_REG_ALS_CONFIG, 2, 0x0000, " to enable ambient light sensor", true);
 
     // Set screen orientation and get height/width
     sWidth = M5.Lcd.width();
@@ -74,7 +104,10 @@ void setup()
 
     // set up time zone
     timeClient.begin();
-    timeClient.setTimeOffset(-28800);
+    timeClient.setTimeOffset(-25200);
+
+    // initial API call
+    makeApiRequest();
 }
 
 ///////////////////////////////////////////////////////////////
@@ -84,41 +117,109 @@ void loop()
 {
     M5.update();
 
+    float tempC = 0;
+    float hum = 0;
+
+    I2C_RW::getShtTempHum(&tempC, &hum);
+    Serial.printf("temp: %f\nhum: %f\n", tempC, hum);
+    delay(500);
+
+    //////////////////////////////////////////////////////////////////////////////////
+    // I2C proximity portion
+    //////////////////////////////////////////////////////////////////////////////////
+    // I2C calls to read sensor data
+
+    // Turning screen on and off based on proximity
+    int prox = I2C_RW::readReg8Addr16Data(VCNL_REG_PROX_DATA, 2, "to read proximity data", false);
+    Serial.printf("Proximity: %d\n", prox);
+    if (prox < 100)
+    {
+        M5.Lcd.writecommand(ILI9341_DISPON);
+    }
+    else
+    {
+        M5.Lcd.writecommand(ILI9341_DISPOFF);
+    }
+
+    // Dimming and brightening screen based on light
+    int amb = I2C_RW::readReg8Addr16Data(VCNL_REG_ALS_DATA, 2, "to read ambient light data", false);
+    amb = amb * 0.1; // See pg 12 of datasheet - we are using ALS_IT (7:6)=(0,0)=80ms integration time = 0.10 lux/step for a max range of 6553.5 lux
+    Serial.printf("Ambient Light: %d\n", amb);
+
+    // Min screen value = 2500
+    // Max screen value = 2800
+    // 150 val for amb will give max brightness
+    int brightness = (150 < amb) ? 150 : amb;
+    M5.Axp.SetLcdVoltage(2500 + (brightness * 2));
+    delay(1000);
+
+    //////////////////////////////////////////////////////////////////////////////////
+    // Page Button Handling
+    //////////////////////////////////////////////////////////////////////////////////
     // Changes between Farenheit and Celsius
     if (M5.BtnA.wasPressed())
     {
-        btnAClicks++;
-
-        drawMainScreen();
+        btnAClicked = !btnAClicked;
+        screenState = 'A';
+        drawWeatherScreen();
     }
-
-    // Changes between Weather and ZIP screens
-    if (M5.BtnC.wasPressed())
+    //////////////////////////////////////////////////////////////////////////////////
+    // Changes between Weather and Temp/Humidity Screens
+    if (M5.BtnB.wasPressed())
     {
-        btnCClicks++;
-
-        if (btnCClicks % 2 == 0)
+        if (screenState == 'B')
         {
-            drawMainScreen();
+            screenState = 'A';
+            drawWeatherScreen();
         }
         else
         {
+            Serial.println("screenState = B");
+            // screenState = 'B';
+            // drawHumidityScreen();
+        }
+    }
+    //////////////////////////////////////////////////////////////////////////////////
+    // Changes between Weather and ZIP screens
+    if (M5.BtnC.wasPressed())
+    {
+        if (screenState == 'C')
+        {
+            screenState = 'A';
+            makeApiRequest();
+            drawWeatherScreen();
+        }
+        else
+        {
+            screenState = 'C';
             drawZipcodeScreen();
         }
     }
 
-    // Refreshes Weather OR ZIP screen
-    if (btnCClicks % 2 == 0)
+    //////////////////////////////////////////////////////////////////////////////////
+    // Page Screen Handling
+    //////////////////////////////////////////////////////////////////////////////////
+    // Draw Weather Screen A
+    if (screenState == 'A')
     {
         if ((millis() - lastTime) > timerDelay)
         {
-            drawMainScreen();
-
+            makeApiRequest();
+            drawWeatherScreen();
             lastTime = millis(); // Update the last time to NOW
         }
     }
-    else
+    //////////////////////////////////////////////////////////////////////////////////
+    // Draw Temp/Humidity Screen B
+    if (screenState == 'B')
     {
+        Serial.println("Humidity Screen Printed");
+    }
+    //////////////////////////////////////////////////////////////////////////////////
+    // Draw ZIP Code Screen C
+    if (screenState == 'C')
+    {
+        // Adjust zipcode for button presses
         for (int i = 0; i < 10; i++)
         {
             if (zipButtons[i].wasPressed())
@@ -229,26 +330,19 @@ void drawWeatherImage(String iconId, int resizeMult)
     }
 }
 
-String zipString()
-{
-    String string = "";
-
-    for (int i = 0; i < 5; i++)
-    {
-        string += zipCode[i];
-    }
-    return string;
-}
-
-void drawMainScreen()
+void makeApiRequest()
 {
     if (WiFi.status() == WL_CONNECTED)
     {
+        //////////////////////////////////////////////////////////////////
+        // Call TimeClient: Get Date and Time of API Call
+        //////////////////////////////////////////////////////////////////
         timeClient.update();
         formattedDate = timeClient.getFormattedTime();
-        int hours = (timeClient.getHours() < 13) ? timeClient.getHours() : timeClient.getHours() - 12;
-        int min = timeClient.getMinutes();
-        int seconds = timeClient.getSeconds();
+        Serial.println("Date : " + formattedDate);
+        hours = (timeClient.getHours() < 13) ? timeClient.getHours() : timeClient.getHours() - 12;
+        minutes = timeClient.getMinutes();
+        seconds = timeClient.getSeconds();
 
         //////////////////////////////////////////////////////////////////
         // TODO 4: Hardcode the specific city,state,country into the query
@@ -256,183 +350,143 @@ void drawMainScreen()
         //////////////////////////////////////////////////////////////////
         // api.openweathermap.org/data/2.5/weather?zip={zip code},{country code}&appid={API key}
         // String serverURL = urlOpenWeather + "q=Kleinfeltersville,pa,usa&units=imperial&appid=" + apiKey;
-        String zipCodeString = zipString();
+        String zipCodeString = "";
+        for (int i = 0; i < 5; i++)
+        {
+            zipCodeString += zipCode[i];
+        }
         String serverURL = urlOpenWeather + "zip=" + zipCodeString + "&units=imperial" + "&appid=" + apiKey;
-
         // Serial.println(serverURL); // Debug print
 
         //////////////////////////////////////////////////////////////////
         // TODO 5: Make GET request and store reponse
         //////////////////////////////////////////////////////////////////
-        String response = httpGETRequest(serverURL.c_str());
+        apiResponse = httpGETRequest(serverURL.c_str());
         // Serial.print(response); // Debug print
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 6: Import ArduinoJSON Library and then use arduinojson.org/v6/assistant to
-        // compute the proper capacity (this is a weird library thing) and initialize
-        // the json object
-        //////////////////////////////////////////////////////////////////
-        const size_t jsonCapacity = 768 + 250;
-        DynamicJsonDocument objResponse(jsonCapacity);
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 7: (uncomment) Deserialize the JSON document and test if parsing succeeded
-        //////////////////////////////////////////////////////////////////
-        DeserializationError error = deserializeJson(objResponse, response);
-        if (error)
-        {
-            Serial.print(F("deserializeJson() failed: "));
-            Serial.println(error.f_str());
-            return;
-        }
-        // serializeJsonPretty(objResponse, Serial); // Debug print
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 8: Parse Response to get the weather description and icon
-        //////////////////////////////////////////////////////////////////
-        JsonArray arrWeather = objResponse["weather"];
-        JsonObject objWeather0 = arrWeather.getElement(0);
-        String strWeatherDesc = objWeather0["main"];
-        String strWeatherIcon = objWeather0["icon"];
-        String cityName = objResponse["name"];
-
-        // TODO 9: Parse response to get the temperatures
-        JsonObject objMain = objResponse["main"];
-        double tempNowF = objMain["temp"];
-        double tempMinF = objMain["temp_min"];
-        double tempMaxF = objMain["temp_max"];
-        Serial.printf("NOW: %.1f F and %s\tMIN: %.1f F\tMax: %.1f F\n", tempNowF, strWeatherDesc, tempMinF, tempMaxF);
-
-        // Getting Celcius  C = (F - 32 ) * 5/9
-        double tempNowC = (tempNowF - 32) * 5 / 9;
-        double tempMinC = (tempMinF - 32) * 5 / 9;
-        double tempMaxC = (tempMaxF - 32) * 5 / 9;
-        Serial.printf("NOW: %.1f C and %s\tMIN: %.1f C\tMax: %.1f C\n", tempNowC, strWeatherDesc, tempMinC, tempMaxC);
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 10: We can download the image directly, but there is no easy
-        // way to work with a PNG file on the ESP32 (in Arduino) so we will
-        // take another route - see EGR425_Phase1_weather_bitmap_images.h
-        // for more details
-        //////////////////////////////////////////////////////////////////
-        // String imagePath = "http://openweathermap.org/img/wn/" + strWeatherIcon + "@2x.png";
-        // Serial.println(imagePath);
-        // response = httpGETRequest(imagePath.c_str());
-        // Serial.print(response);
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 12: Draw background - light blue if day time and navy blue of night
-        //////////////////////////////////////////////////////////////////
-        uint16_t primaryTextColor;
-        if (strWeatherIcon.indexOf("d") >= 0)
-        {
-            M5.Lcd.fillScreen(TFT_CYAN);
-            primaryTextColor = TFT_DARKGREY;
-        }
-        else
-        {
-            M5.Lcd.fillScreen(TFT_NAVY);
-            primaryTextColor = TFT_WHITE;
-        }
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 13: Draw the icon on the right side of the screen - the built in
-        // drawBitmap method works, but we cannot scale up the image
-        // size well, so we'll call our own method
-        //////////////////////////////////////////////////////////////////
-        // M5.Lcd.drawBitmap(0, 0, 100, 100, myBitmap, TFT_BLACK);
-        drawWeatherImage(strWeatherIcon, 3);
-
-        //////////////////////////////////////////////////////////////////
-        // This code will draw the temperature centered on the screen; left
-        // it out in favor of another formatting style
-        //////////////////////////////////////////////////////////////////
-        /*
-        M5.Lcd.setTextColor(TFT_WHITE);
-        textSize = 10;
-        M5.Lcd.setTextSize(textSize);
-        int iTempNowF = tempNowF;
-        tWidth = textSize * String(iTempNowF).length() * 5;
-        tHeight = textSize * 5;
-        M5.Lcd.setCursor(sWidth/2 - tWidth/2,sHeight/2 - tHeight/2);
-        M5.Lcd.print(iTempNowF);
-        */
-
-        //////////////////////////////////////////////////////////////////
-        // TODO 14: Draw the temperatures and city name
-        //////////////////////////////////////////////////////////////////
-        int pad = 10;
-        M5.Lcd.setCursor(pad, pad);
-        M5.Lcd.setTextColor(TFT_BLUE);
-        M5.Lcd.setTextSize(3);
-        if (btnAClicks % 2 == 0)
-        {
-            M5.Lcd.printf("LO:%0.fF\n", tempMinF);
-        }
-        else
-        {
-            M5.Lcd.printf("LO:%0.fC\n", tempMinC);
-        }
-
-        M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
-        M5.Lcd.setTextColor(primaryTextColor);
-        M5.Lcd.setTextSize(10);
-        if (btnAClicks % 2 == 0)
-        {
-            M5.Lcd.printf("LO:%0.fF\n", tempNowF);
-        }
-        else
-        {
-            M5.Lcd.printf("LO:%0.fC\n", tempNowC);
-        }
-
-        M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
-        M5.Lcd.setTextColor(TFT_RED);
-        M5.Lcd.setTextSize(3);
-        if (btnAClicks % 2 == 0)
-        {
-            M5.Lcd.printf("LO:%0.fF\n", tempMaxF);
-        }
-        else
-        {
-            M5.Lcd.printf("LO:%0.fC\n", tempMaxC);
-        }
-
-        int cityTextSize = (cityName.length() < 15) ? 3 : 2;
-        M5.Lcd.setTextSize(cityTextSize);
-        M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
-        M5.Lcd.setTextColor(primaryTextColor);
-        M5.Lcd.printf("%s\n", cityName.c_str());
-
-        M5.Lcd.setTextSize(3);
-        M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
-        M5.Lcd.setTextColor(primaryTextColor);
-        M5.Lcd.printf("%d:%d:%d", hours, min, seconds);
-
-        // setting zipButtons
-
-        // degrees button switch
-        M5.Lcd.setTextSize(2);
-        M5.Lcd.setCursor(pad + 5, M5.Lcd.getCursorY() + 80);
-        M5.Lcd.setTextColor(primaryTextColor);
-        if (btnAClicks % 2 == 0)
-        {
-            M5.Lcd.printf("F/C");
-        }
-        else
-        {
-            M5.Lcd.printf("C/F");
-        }
-        M5.Lcd.setTextSize(2);
-        M5.Lcd.setCursor(220, M5.Lcd.getCursorY());
-        M5.Lcd.setTextColor(primaryTextColor);
-        M5.Lcd.printf("Zip Code");
     }
     else
     {
         Serial.println("WiFi Disconnected");
     }
 }
+
+void drawWeatherScreen()
+{
+    //////////////////////////////////////////////////////////////////
+    // TODO 6: Import ArduinoJSON Library and then use arduinojson.org/v6/assistant to
+    // compute the proper capacity (this is a weird library thing) and initialize
+    // the json object
+    //////////////////////////////////////////////////////////////////
+    const size_t jsonCapacity = 768 + 250;
+    DynamicJsonDocument objResponse(jsonCapacity);
+
+    //////////////////////////////////////////////////////////////////
+    // TODO 7: (uncomment) Deserialize the JSON document and test if parsing succeeded
+    //////////////////////////////////////////////////////////////////
+    DeserializationError error = deserializeJson(objResponse, apiResponse);
+    if (error)
+    {
+        Serial.print(F("deserializeJson() failed: "));
+        Serial.println(error.f_str());
+        return;
+    }
+    // serializeJsonPretty(objResponse, Serial); // Debug print
+
+    //////////////////////////////////////////////////////////////////
+    // TODO 8: Parse Response to get the weather description and icon
+    //////////////////////////////////////////////////////////////////
+    JsonArray arrWeather = objResponse["weather"];
+    JsonObject objWeather0 = arrWeather.getElement(0);
+    String strWeatherDesc = objWeather0["main"];
+    String strWeatherIcon = objWeather0["icon"];
+    String cityName = objResponse["name"];
+
+    // TODO 9: Parse response to get the temperatures
+    JsonObject objMain = objResponse["main"];
+    double tempNowF = objMain["temp"];
+    double tempMinF = objMain["temp_min"];
+    double tempMaxF = objMain["temp_max"];
+    Serial.printf("NOW: %.1f F and %s\tMIN: %.1f F\tMAX: %.1f F\n", tempNowF, strWeatherDesc, tempMinF, tempMaxF);
+
+    // Getting Celcius  C = (F - 32 ) * 5/9
+    double tempNowC = (tempNowF - 32) * 5 / 9;
+    double tempMinC = (tempMinF - 32) * 5 / 9;
+    double tempMaxC = (tempMaxF - 32) * 5 / 9;
+    Serial.printf("NOW: %.1f C and %s\tMIN: %.1f C\tMAX: %.1f C\n", tempNowC, strWeatherDesc, tempMinC, tempMaxC);
+
+    //////////////////////////////////////////////////////////////////
+    // TODO 10: We can download the image directly, but there is no easy
+    // way to work with a PNG file on the ESP32 (in Arduino) so we will
+    // take another route - see EGR425_Phase1_weather_bitmap_images.h
+    // for more details
+    //////////////////////////////////////////////////////////////////
+    // String imagePath = "http://openweathermap.org/img/wn/" + strWeatherIcon + "@2x.png";
+    // Serial.println(imagePath);
+    // response = httpGETRequest(imagePath.c_str());
+    // Serial.print(response);
+
+    //////////////////////////////////////////////////////////////////
+    // TODO 12: Draw background - light blue if day time and dark blue of night
+    //////////////////////////////////////////////////////////////////
+    uint16_t primaryTextColor;
+    if (strWeatherIcon.indexOf("d") >= 0)
+    {
+        M5.Lcd.fillScreen(0x077F);
+        primaryTextColor = TFT_BLACK;
+    }
+    else
+    {
+        M5.Lcd.fillScreen(0x0007);
+        primaryTextColor = TFT_LIGHTGREY;
+    }
+
+    //////////////////////////////////////////////////////////////////
+    // TODO 13: Draw the icon on the right side of the screen - the built in
+    // drawBitmap method works, but we cannot scale up the image
+    // size well, so we'll call our own method
+    //////////////////////////////////////////////////////////////////
+    // M5.Lcd.drawBitmap(0, 0, 100, 100, myBitmap, TFT_BLACK);
+    drawWeatherImage(strWeatherIcon, 3);
+
+    //////////////////////////////////////////////////////////////////
+    // TODO 14: Draw the temperatures and city name
+    //////////////////////////////////////////////////////////////////
+    int pad = 10;
+
+    // Print Forecast High
+    M5.Lcd.setCursor(pad, pad);
+    M5.Lcd.setTextColor(TFT_RED);
+    M5.Lcd.setTextSize(3);
+    btnAClicked ? M5.Lcd.printf("HI:%0.fC\n", tempMaxC) : M5.Lcd.printf("HI:%0.fF\n", tempMaxF);
+
+    // Print Current Tempurature
+    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    M5.Lcd.setTextColor(primaryTextColor);
+    M5.Lcd.setTextSize(10);
+    btnAClicked ? M5.Lcd.printf("%0.fC\n", tempNowC) : M5.Lcd.printf("%0.fF\n", tempNowF);
+
+    // Print Forecast Low
+    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    M5.Lcd.setTextColor(TFT_BLUE);
+    M5.Lcd.setTextSize(3);
+    btnAClicked ? M5.Lcd.printf("LO:%0.fC\n", tempMinC) : M5.Lcd.printf("LO:%0.fF\n", tempMinF);
+
+    // Print City Name
+    int cityTextSize = (cityName.length() < 15) ? 3 : 2;
+    M5.Lcd.setTextSize(cityTextSize);
+    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    M5.Lcd.setTextColor(TFT_DARKGREEN);
+    M5.Lcd.printf("%s\n", cityName.c_str());
+
+    // Print Time of API call
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
+    M5.Lcd.printf("%d:%d:%d", hours, minutes, seconds);
+
+    drawButtonLabels(primaryTextColor);
+}
+
+
 void drawZipcodeScreen()
 {
     // draw zip code gui
@@ -467,12 +521,10 @@ void drawZipcodeScreen()
         M5.Lcd.setCursor(top.x - offset, y);
         M5.Lcd.setTextColor(TFT_WHITE);
         M5.Lcd.setTextSize(5);
-
         M5.Lcd.print(zipCode[i]);
-        M5.Lcd.setTextSize(2);
-        M5.Lcd.setCursor(sWidth - (xSpace * 4), sHeight - 20);
-        M5.Lcd.printf("Enter");
     }
+
+    drawButtonLabels(TFT_LIGHTGREY);
 
     class Point
     {
@@ -482,16 +534,25 @@ void drawZipcodeScreen()
     };
 }
 
-void drawZipcode(int32_t x, int i)
+//////////////////////////////////////////////////////////////////
+// TODO 15: Draw Button Labels
+//////////////////////////////////////////////////////////////////
+void drawButtonLabels(uint16_t textColor)
 {
-    int y = 85;
-    int offset = 10;
+    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextColor(textColor);
 
-    M5.Lcd.setCursor(x - offset, y);
-    M5.Lcd.setTextColor(TFT_WHITE);
-    M5.Lcd.setTextSize(5);
+    // Convert Temp Units Button
+    M5.Lcd.setCursor(32, 220);
+    btnAClicked ? M5.Lcd.printf("C->F") : M5.Lcd.printf("F->C");
 
-    M5.Lcd.print(zipCode[i]);
+    // Show Sensor Temp and Humidity
+    M5.Lcd.setCursor(sWidth / 2 - 40, M5.Lcd.getCursorY());
+    M5.Lcd.printf("Sensors");
+
+    // Change ZIP Code Button
+    M5.Lcd.setCursor(250, M5.Lcd.getCursorY());
+    M5.Lcd.printf("ZIP");
 }
 
 //////////////////////////////////////////////////////////////////////////////////
