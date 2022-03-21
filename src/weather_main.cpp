@@ -31,7 +31,7 @@ String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
 String apiKey = "5f6aefe3a8c1ddca7cb7e48c2e23d4d9";
 
 // TODO 1: WiFi variables
-String wifiNetworkName = "CBU";
+String wifiNetworkName = "CBU-LancerArmsEast";
 String wifiPassword = "";
 
 // Time limit variables
@@ -71,6 +71,7 @@ Button zipButtons[10] = {Button(0, 0, 50, 50), Button(65, 0, 50, 50), Button(130
 ////////////////////////////////////////////////////////////////////
 String httpGETRequest(const char *serverName);
 void drawWeatherImage(String iconId, int resizeMult);
+void makeTimeUpdate();
 void makeApiRequest();
 void drawWeatherScreen();
 void drawSensorsScreen();
@@ -156,6 +157,7 @@ void loop()
         if (screenState == 'C')
         {
             screenState = 'A';
+            makeTimeUpdate();
             makeApiRequest();
             drawWeatherScreen();
         }
@@ -174,6 +176,7 @@ void loop()
     {
         if ((millis() - lastTime) > timerDelay)
         {
+            makeTimeUpdate();
             makeApiRequest();
             drawWeatherScreen();
             lastTime = millis(); // Update the last time to NOW
@@ -332,10 +335,8 @@ void drawWeatherImage(String iconId, int resizeMult)
     }
 }
 
-void makeApiRequest()
-{
-    if (WiFi.status() == WL_CONNECTED)
-    {
+void makeTimeUpdate(){
+    if (WiFi.status() == WL_CONNECTED) {
         //////////////////////////////////////////////////////////////////
         // Call TimeClient: Get Date and Time of API Call
         //////////////////////////////////////////////////////////////////
@@ -343,7 +344,17 @@ void makeApiRequest()
         hours = (timeClient.getHours() < 13) ? timeClient.getHours() : timeClient.getHours() - 12;
         minutes = timeClient.getMinutes();
         seconds = timeClient.getSeconds();
+    }
+    else
+    {
+        Serial.println("WiFi Disconnected");
+    }
+}
 
+void makeApiRequest()
+{
+    if (WiFi.status() == WL_CONNECTED)
+    {
         //////////////////////////////////////////////////////////////////
         // TODO 4: Hardcode the specific city,state,country into the query
         // Examples: https://api.openweathermap.org/data/2.5/weather?q=riverside,ca,usa&units=imperial&appid=YOUR_API_KEY
@@ -504,11 +515,11 @@ void drawSensorsScreen()
         int pad = 10;
         M5.Lcd.setCursor(pad, pad);
         M5.Lcd.setTextColor(0xF540);
-        M5.Lcd.setTextSize(4);
-        M5.Lcd.printf("SHT40");
+        M5.Lcd.setTextSize(3);
+        M5.Lcd.printf("Local Weather");
 
-        M5.Lcd.fillCircle(240, 15, 5, TFT_RED);
-        M5.Lcd.setCursor(250, M5.Lcd.getCursorY());
+        M5.Lcd.fillCircle(245, 15, 5, TFT_RED);
+        M5.Lcd.setCursor(255, M5.Lcd.getCursorY());
         M5.Lcd.setTextSize(2);
         M5.Lcd.setTextColor(TFT_RED);
         M5.Lcd.println("LIVE");
@@ -523,6 +534,7 @@ void drawSensorsScreen()
         M5.Lcd.setTextColor(TFT_GREENYELLOW);
         M5.Lcd.printf("Humidity: %0.f%%", humd);
 
+        makeTimeUpdate();
         M5.Lcd.setCursor(pad * 2, sHeight * 3 / 4);
         M5.Lcd.setTextColor(TFT_LIGHTGREY);
         M5.Lcd.printf("%d:%d:%d", hours, minutes, seconds);
