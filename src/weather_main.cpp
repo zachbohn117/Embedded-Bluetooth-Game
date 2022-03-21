@@ -23,8 +23,8 @@
 ////////////////////////////////////////////////////////////////////
 
 // I2C Pins
-int const PIN_SDA = 32;
-int const PIN_SCL = 33;
+const int PIN_SDA = 32;
+const int PIN_SCL = 33;
 
 // TODO 3: Register for openweather account and get API key
 String urlOpenWeather = "https://api.openweathermap.org/data/2.5/weather?";
@@ -39,7 +39,8 @@ unsigned long lastTime = 0;
 unsigned long timerDelay = 5000; // 5000; 5 minutes (300,000ms) or 5 seconds (5,000ms)
 
 // Button Variables
-bool btnAClicked = false;
+bool unitIsCelsius = false;
+bool btnBWasClicked = false;
 char screenState = 'A';
 
 // Set up time components
@@ -47,11 +48,14 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
 // Weather screen variables
-String formattedDate;
 String apiResponse;
 int hours;
 int minutes;
 int seconds;
+
+// Sensor variables
+float tempC = 0;
+float humd = 0;
 
 // LCD variables
 int sWidth;
@@ -69,7 +73,7 @@ String httpGETRequest(const char *serverName);
 void drawWeatherImage(String iconId, int resizeMult);
 void makeApiRequest();
 void drawWeatherScreen();
-// void drawHumidityScreen();
+void drawSensorsScreen();
 void drawZipcodeScreen();
 void drawButtonLabels(uint16_t textColor);
 
@@ -117,51 +121,17 @@ void loop()
 {
     M5.update();
 
-    float tempC = 0;
-    float hum = 0;
-
-    I2C_RW::getShtTempHum(&tempC, &hum);
-    Serial.printf("temp: %f\nhum: %f\n", tempC, hum);
-    delay(500);
-
-    //////////////////////////////////////////////////////////////////////////////////
-    // I2C proximity portion
-    //////////////////////////////////////////////////////////////////////////////////
-    // I2C calls to read sensor data
-
-    // Turning screen on and off based on proximity
-    int prox = I2C_RW::readReg8Addr16Data(VCNL_REG_PROX_DATA, 2, "to read proximity data", false);
-    Serial.printf("Proximity: %d\n", prox);
-    if (prox < 100)
-    {
-        M5.Lcd.writecommand(ILI9341_DISPON);
-    }
-    else
-    {
-        M5.Lcd.writecommand(ILI9341_DISPOFF);
-    }
-
-    // Dimming and brightening screen based on light
-    int amb = I2C_RW::readReg8Addr16Data(VCNL_REG_ALS_DATA, 2, "to read ambient light data", false);
-    amb = amb * 0.1; // See pg 12 of datasheet - we are using ALS_IT (7:6)=(0,0)=80ms integration time = 0.10 lux/step for a max range of 6553.5 lux
-    Serial.printf("Ambient Light: %d\n", amb);
-
-    // Min screen value = 2500
-    // Max screen value = 2800
-    // 150 val for amb will give max brightness
-    int brightness = (150 < amb) ? 150 : amb;
-    M5.Axp.SetLcdVoltage(2500 + (brightness * 2));
-    delay(1000);
-
     //////////////////////////////////////////////////////////////////////////////////
     // Page Button Handling
     //////////////////////////////////////////////////////////////////////////////////
     // Changes between Farenheit and Celsius
     if (M5.BtnA.wasPressed())
     {
-        btnAClicked = !btnAClicked;
-        screenState = 'A';
-        drawWeatherScreen();
+        unitIsCelsius = !unitIsCelsius;
+        if (screenState == 'A')
+            drawWeatherScreen();
+        if (screenState == 'C')
+            drawSensorsScreen();
     }
     //////////////////////////////////////////////////////////////////////////////////
     // Changes between Weather and Temp/Humidity Screens
@@ -174,9 +144,9 @@ void loop()
         }
         else
         {
-            Serial.println("screenState = B");
-            // screenState = 'B';
-            // drawHumidityScreen();
+            screenState = 'B';
+            btnBWasClicked = true;
+            drawSensorsScreen();
         }
     }
     //////////////////////////////////////////////////////////////////////////////////
@@ -213,7 +183,11 @@ void loop()
     // Draw Temp/Humidity Screen B
     if (screenState == 'B')
     {
-        Serial.println("Humidity Screen Printed");
+        if ((millis() - lastTime) > timerDelay)
+        {
+            drawSensorsScreen();
+            lastTime = millis();
+        }
     }
     //////////////////////////////////////////////////////////////////////////////////
     // Draw ZIP Code Screen C
@@ -240,6 +214,34 @@ void loop()
             }
         }
     }
+
+    //////////////////////////////////////////////////////////////////////////////////
+    // I2C proximity portion
+    //////////////////////////////////////////////////////////////////////////////////
+    // I2C calls to read sensor data
+
+    // Turning screen on and off based on proximity
+    int prox = I2C_RW::readReg8Addr16Data(VCNL_REG_PROX_DATA, 2, "to read proximity data", false);
+    // Serial.printf("Proximity: %d\n", prox);
+    if (prox < 100)
+    {
+        M5.Lcd.writecommand(ILI9341_DISPON);
+    }
+    else
+    {
+        M5.Lcd.writecommand(ILI9341_DISPOFF);
+    }
+
+    // Dimming and brightening screen based on light
+    int amb = I2C_RW::readReg8Addr16Data(VCNL_REG_ALS_DATA, 2, "to read ambient light data", false);
+    amb = amb * 0.1; // See pg 12 of datasheet - we are using ALS_IT (7:6)=(0,0)=80ms integration time = 0.10 lux/step for a max range of 6553.5 lux
+    // Serial.printf("Ambient Light: %d\n", amb);
+
+    // Min screen value = 2500
+    // Max screen value = 2800
+    // 150 val for amb will give max brightness
+    int brightness = (150 < amb) ? 150 : amb;
+    M5.Axp.SetLcdVoltage(2500 + (brightness * 2));
 }
 
 /////////////////////////////////////////////////////////////////
@@ -338,8 +340,6 @@ void makeApiRequest()
         // Call TimeClient: Get Date and Time of API Call
         //////////////////////////////////////////////////////////////////
         timeClient.update();
-        formattedDate = timeClient.getFormattedTime();
-        Serial.println("Date : " + formattedDate);
         hours = (timeClient.getHours() < 13) ? timeClient.getHours() : timeClient.getHours() - 12;
         minutes = timeClient.getMinutes();
         seconds = timeClient.getSeconds();
@@ -403,15 +403,15 @@ void drawWeatherScreen()
 
     // TODO 9: Parse response to get the temperatures
     JsonObject objMain = objResponse["main"];
-    double tempNowF = objMain["temp"];
-    double tempMinF = objMain["temp_min"];
-    double tempMaxF = objMain["temp_max"];
+    float tempNowF = objMain["temp"];
+    float tempMinF = objMain["temp_min"];
+    float tempMaxF = objMain["temp_max"];
     Serial.printf("NOW: %.1f F and %s\tMIN: %.1f F\tMAX: %.1f F\n", tempNowF, strWeatherDesc, tempMinF, tempMaxF);
 
     // Getting Celcius  C = (F - 32 ) * 5/9
-    double tempNowC = (tempNowF - 32) * 5 / 9;
-    double tempMinC = (tempMinF - 32) * 5 / 9;
-    double tempMaxC = (tempMaxF - 32) * 5 / 9;
+    float tempNowC = (tempNowF - 32) * 5 / 9;
+    float tempMinC = (tempMinF - 32) * 5 / 9;
+    float tempMaxC = (tempMaxF - 32) * 5 / 9;
     Serial.printf("NOW: %.1f C and %s\tMIN: %.1f C\tMAX: %.1f C\n", tempNowC, strWeatherDesc, tempMinC, tempMaxC);
 
     //////////////////////////////////////////////////////////////////
@@ -457,19 +457,19 @@ void drawWeatherScreen()
     M5.Lcd.setCursor(pad, pad);
     M5.Lcd.setTextColor(TFT_RED);
     M5.Lcd.setTextSize(3);
-    btnAClicked ? M5.Lcd.printf("HI:%0.fC\n", tempMaxC) : M5.Lcd.printf("HI:%0.fF\n", tempMaxF);
+    unitIsCelsius ? M5.Lcd.printf("HI:%0.fC\n", tempMaxC) : M5.Lcd.printf("HI:%0.fF\n", tempMaxF);
 
     // Print Current Tempurature
     M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
     M5.Lcd.setTextColor(primaryTextColor);
     M5.Lcd.setTextSize(10);
-    btnAClicked ? M5.Lcd.printf("%0.fC\n", tempNowC) : M5.Lcd.printf("%0.fF\n", tempNowF);
+    unitIsCelsius ? M5.Lcd.printf("%0.fC\n", tempNowC) : M5.Lcd.printf("%0.fF\n", tempNowF);
 
     // Print Forecast Low
     M5.Lcd.setCursor(pad, M5.Lcd.getCursorY());
     M5.Lcd.setTextColor(TFT_BLUE);
     M5.Lcd.setTextSize(3);
-    btnAClicked ? M5.Lcd.printf("LO:%0.fC\n", tempMinC) : M5.Lcd.printf("LO:%0.fF\n", tempMinF);
+    unitIsCelsius ? M5.Lcd.printf("LO:%0.fC\n", tempMinC) : M5.Lcd.printf("LO:%0.fF\n", tempMinF);
 
     // Print City Name
     int cityTextSize = (cityName.length() < 15) ? 3 : 2;
@@ -486,11 +486,59 @@ void drawWeatherScreen()
     drawButtonLabels(primaryTextColor);
 }
 
+void drawSensorsScreen()
+{
+    int preTemp = tempC;
+    int preHumd = humd;
+
+    I2C_RW::getShtTempHum(&tempC, &humd);
+
+    if ((preTemp != (int)tempC || preHumd != (int)humd) || btnBWasClicked)
+    {
+        btnBWasClicked = false;
+
+        Serial.printf("temp: %f\nhum: %f\n", tempC, humd);
+
+        M5.Lcd.fillScreen(TFT_BLACK);
+
+        int pad = 10;
+        M5.Lcd.setCursor(pad, pad);
+        M5.Lcd.setTextColor(0xF540);
+        M5.Lcd.setTextSize(4);
+        M5.Lcd.printf("SHT40");
+
+        M5.Lcd.fillCircle(240, 15, 5, TFT_RED);
+        M5.Lcd.setCursor(250, M5.Lcd.getCursorY());
+        M5.Lcd.setTextSize(2);
+        M5.Lcd.setTextColor(TFT_RED);
+        M5.Lcd.println("LIVE");
+
+        M5.Lcd.setCursor(pad * 2, sHeight * 1 / 4);
+        M5.Lcd.setTextColor(TFT_CYAN);
+        M5.Lcd.setTextSize(3);
+        unitIsCelsius ? M5.Lcd.printf("Temp: %0.fC", tempC)
+                      : M5.Lcd.printf("Temp: %0.fF", (tempC * 9.0 / 5.0) + 32.0);
+
+        M5.Lcd.setCursor(pad * 2, sHeight / 2);
+        M5.Lcd.setTextColor(TFT_GREENYELLOW);
+        M5.Lcd.printf("Humidity: %0.f%%", humd);
+
+        M5.Lcd.setCursor(pad * 2, sHeight * 3 / 4);
+        M5.Lcd.setTextColor(TFT_LIGHTGREY);
+        M5.Lcd.printf("%d:%d:%d", hours, minutes, seconds);
+        
+        drawButtonLabels(TFT_LIGHTGREY);
+    }
+    else
+    {
+        Serial.println("No Temp or Humd change");
+    }
+}
 
 void drawZipcodeScreen()
 {
     // draw zip code gui
-    M5.Lcd.fillScreen(BLACK);
+    M5.Lcd.fillScreen(TFT_BLACK);
 
     int start = 25;
     int xSpace = 15;
@@ -544,7 +592,7 @@ void drawButtonLabels(uint16_t textColor)
 
     // Convert Temp Units Button
     M5.Lcd.setCursor(32, 220);
-    btnAClicked ? M5.Lcd.printf("C->F") : M5.Lcd.printf("F->C");
+    unitIsCelsius ? M5.Lcd.printf("C->F") : M5.Lcd.printf("F->C");
 
     // Show Sensor Temp and Humidity
     M5.Lcd.setCursor(sWidth / 2 - 40, M5.Lcd.getCursorY());
