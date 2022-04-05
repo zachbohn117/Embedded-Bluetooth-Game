@@ -335,8 +335,10 @@ void drawWeatherImage(String iconId, int resizeMult)
     }
 }
 
-void makeTimeUpdate(){
-    if (WiFi.status() == WL_CONNECTED) {
+void makeTimeUpdate()
+{
+    if (WiFi.status() == WL_CONNECTED)
+    {
         //////////////////////////////////////////////////////////////////
         // Call TimeClient: Get Date and Time of API Call
         //////////////////////////////////////////////////////////////////
@@ -538,7 +540,7 @@ void drawSensorsScreen()
         M5.Lcd.setCursor(pad * 2, sHeight * 3 / 4);
         M5.Lcd.setTextColor(TFT_LIGHTGREY);
         M5.Lcd.printf("%d:%d:%d", hours, minutes, seconds);
-        
+
         drawButtonLabels(TFT_LIGHTGREY);
     }
     else
