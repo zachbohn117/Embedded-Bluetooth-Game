@@ -71,7 +71,7 @@ void setup() {
 void loop() {
     M5.update();
 
-    int choice = rand() % 3; // picks a random value [0, 5). each value represents a game task
+    int choice = rand() % 3; // picks a random value [0, 3). each value represents a game task
     
     Serial.printf("current points: %i \n", points);
 
@@ -85,7 +85,7 @@ void loop() {
 
             I2C_RW::getShtTempHum(&tempC, &humd);
             
-            while (!isComplete) {
+            while (!isComplete) {  // TODO: completes too soon. see to fix
                 if (preHumd > 40) {
                     preHumd = 40;
                 }

@@ -4,7 +4,7 @@
 //      https://randomnerdtutorials.com/esp32-bluetooth-low-energy-ble-arduino-ide/
 //      https://www.electronicshub.org/esp32-ble-tutorial/
 #include <BLEDevice.h>
-//#include <BLEServer.h>
+#include <BLEServer.h>
 // #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <M5Core2.h>
@@ -25,17 +25,15 @@
 ///////////////////////////////////////////////////////////////
 // Variables
 ///////////////////////////////////////////////////////////////
-static boolean doConnect = false;
-// static boolean connected = false;
-static boolean doScan = false;
-static BLERemoteCharacteristic *pRemoteCharacteristic;
-static BLEAdvertisedDevice *myDevice;
+BLEServer *bleServer;
+BLEService *bleService;
+BLECharacteristic *bleCharacteristic;
 bool deviceConnected = false;
 int timer = 0;
 
 // See the following for generating UUIDs: https://www.uuidgenerator.net/
-static BLEUUID SERVICE_UUID("f9d6e404-4062-4919-bfc7-494dbbb64ac3"); // Dr. Dan's Service
-static BLEUUID CHARACTERISTIC_UUID("ebb77b1f-f6dd-4164-9d1b-9a00378dc46a"); // Zach's Characteristic
+#define SERVICE_UUID "f9d6e404-4062-4919-bfc7-494dbbb64ac3"
+#define CHARACTERISTIC_UUID "ebb77b1f-f6dd-4164-9d1b-9a00378dc46a"
 
 // Game State variables
 bool isSuccess = false;
@@ -63,119 +61,18 @@ float accY;
 float accZ;
 
 ///////////////////////////////////////////////////////////////
-// BLE Client Callback Methods
+// BLE Server Callback Methods
 ///////////////////////////////////////////////////////////////
-static void notifyCallback(
-    BLERemoteCharacteristic *pBLERemoteCharacteristic,
-    uint8_t *pData,
-    size_t length,
-    bool isNotify)
-{
-    Serial.print("Notify callback for characteristic ");
-    Serial.print(pBLERemoteCharacteristic->getUUID().toString().c_str());
-    Serial.print(" of data length ");
-    Serial.println(length);
-    Serial.print("data: ");
-    Serial.println((char *)pData);
-}
-
-class MyClientCallback : public BLEClientCallbacks
-{
-    void onConnect(BLEClient *pclient)
-    {
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer *pServer) {
         deviceConnected = true;
         Serial.println("Device connected...");
     }
-
-    void onDisconnect(BLEClient *pclient)
-    {
+    void onDisconnect(BLEServer *pServer) {
         deviceConnected = false;
         Serial.println("Device disconnected...");
     }
 };
-
-bool connectToServer()
-{
-    Serial.print("Forming a connection to ");
-    Serial.println(myDevice->getAddress().toString().c_str());
-
-    BLEClient *pClient = BLEDevice::createClient();
-    Serial.println(" - Created client");
-
-    pClient->setClientCallbacks(new MyClientCallback());
-
-    // Connect to the remove BLE Server.
-    pClient->connect(myDevice); // if you pass BLEAdvertisedDevice instead of address, it will be recognized type of peer device address (public or private)
-    Serial.println(" - Connected to server");
-
-    // Obtain a reference to the service we are after in the remote BLE server.
-    BLERemoteService *pRemoteService = pClient->getService(SERVICE_UUID);
-    if (pRemoteService == nullptr)
-    {
-        Serial.print("Failed to find our service UUID: ");
-        Serial.println(SERVICE_UUID.toString().c_str());
-        pClient->disconnect();
-        return false;
-    }
-    Serial.println(" - Found our service");
-
-    // Obtain a reference to the characteristic in the service of the remote BLE server.
-    pRemoteCharacteristic = pRemoteService->getCharacteristic(CHARACTERISTIC_UUID);
-    if (pRemoteCharacteristic == nullptr)
-    {
-        Serial.print("Failed to find our characteristic UUID: ");
-        Serial.println(CHARACTERISTIC_UUID.toString().c_str());
-        pClient->disconnect();
-        return false;
-    }
-    Serial.println(" - Found our characteristic");
-
-    // Read the value of the characteristic.
-    if (pRemoteCharacteristic->canRead())
-    {
-        std::string value = pRemoteCharacteristic->readValue();
-        Serial.print("The characteristic value was: ");
-        Serial.println(value.c_str());
-    }
-
-    if (pRemoteCharacteristic->canNotify())
-        pRemoteCharacteristic->registerForNotify(notifyCallback);
-
-    deviceConnected = true;
-}
-
-/**
- * Scan for BLE servers and find the first one that advertises the service we are looking for.
- */
-class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
-{
-    /**
-     * Called for each advertising BLE server.
-     */
-    void onResult(BLEAdvertisedDevice advertisedDevice)
-    {
-        Serial.print("BLE Advertised Device found: ");
-        Serial.printf("\tName: %s\n", advertisedDevice.getName().c_str());
-        Serial.printf("\tAddress: %s\n", advertisedDevice.getAddress().toString().c_str());
-        Serial.printf("\tHas a ServiceUUID: %s\n", advertisedDevice.haveServiceUUID() ? "True" : "False");
-        for (int i = 0; i < advertisedDevice.getServiceUUIDCount(); i++) {
-            Serial.printf("\t\t%s\n", advertisedDevice.getServiceUUID(i).toString().c_str());
-        }
-        Serial.printf("\tHas our service: %s\n\n", advertisedDevice.isAdvertisingService(SERVICE_UUID) ? "True" : "False");
-        // Serial.println(advertisedDevice.toString().c_str());
-
-        // We have found a device, let us now see if it contains the service we are looking for.
-        if (advertisedDevice.haveServiceUUID() && advertisedDevice.isAdvertisingService(SERVICE_UUID))
-        {
-
-            BLEDevice::getScan()->stop();
-            myDevice = new BLEAdvertisedDevice(advertisedDevice);
-            doConnect = true;
-            doScan = true;
-
-        } // Found our server
-    }     // onResult
-};        // M
 
 ///////////////////////////////////////////////////////////////
 // Put your setup code here, to run once
@@ -185,19 +82,44 @@ void setup()
     // Init device
     M5.begin();
     M5.Lcd.setTextSize(3);
-    //Serial.print("Starting BLE...");
+    Serial.print("Starting BLE...");
 
-    BLEDevice::init("");
+    // Initialize M5Core2 as a BLE server
+    BLEDevice::init("My M5Core2");
+    // M5.Lcd.fillScreen(TFT_CYAN);
+    bleServer = BLEDevice::createServer();
+    bleServer->setCallbacks(new MyServerCallbacks());
+    bleService = bleServer->createService(SERVICE_UUID);
+    bleCharacteristic = bleService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ |
+        BLECharacteristic::PROPERTY_WRITE |
+        BLECharacteristic::PROPERTY_NOTIFY |
+        BLECharacteristic::PROPERTY_INDICATE
+    );
+    //bleCharacteristic->addDescriptor(new BLE2902()); // Isaiah does not have
+    // bleCharacteristic->setNotifyProperty(true);
+    // bleCharacteristic->setIndicateProperty(true);
+    bleCharacteristic->setValue("Hello BLE World from Dr. Dan!");
 
-    // Retrieve a Scanner and set the callback we want to use to be informed when we
-    // have detected a new device.  Specify that we want active scanning and start the
-    // scan to run for 5 seconds.
-    BLEScan *pBLEScan = BLEDevice::getScan();
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    pBLEScan->setInterval(1349);
-    pBLEScan->setWindow(449);
-    pBLEScan->setActiveScan(true);
-    pBLEScan->start(5, false);
+    bleService->start();
+
+    // Start broadcasting (advertising) BLE service
+    BLEAdvertising *bleAdvertising = BLEDevice::getAdvertising();
+    bleAdvertising->addServiceUUID(SERVICE_UUID);
+    bleAdvertising->setScanResponse(true); // Isaiah has true
+    // bleAdvertising->setMinPreferred(0x06); // Functions that help with iPhone connection issues
+    bleAdvertising->setMinPreferred(0x12); // Isaiah has
+    // bleAdvertising->setMinPreferred(0x00); // Set value to 0x00 to not advertise this parameter
+    BLEDevice::startAdvertising();
+    // Serial.println("characteristic defined...you can connect with your phone!");
+    // M5.Lcd.fillScreen(TFT_BLUE);
+
+    ///////////////////////////////////////////////////////////////
+    // game set up here
+    ///////////////////////////////////////////////////////////////
+
+    I2C_RW::initI2C(0x44, 400000, 32, 33, true);
 
     // Connect to VCNL sensor
     I2C_RW::initI2C(VCNL_I2C_ADDRESS, 400000, PIN_SDA, PIN_SCL, false);
@@ -217,34 +139,30 @@ void setup()
 ///////////////////////////////////////////////////////////////
 void loop()
 {
-    // If the flag "doConnect" is true then we have scanned for and found the desired
-    // BLE Server with which we wish to connect.  Now we connect to it.  Once we are
-    // connected we set the connected flag to be true.
-    if (doConnect == true)
-    {
-        if (connectToServer())
-        {
-            Serial.println("We are now connected to the BLE Server.");
-        }
-        else
-        {
-            Serial.println("We have failed to connect to the server; there is nothin more we will do.");
-        }
-        doConnect = false;
-    }
-
-    // If we are connected to a peer BLE Server, update the characteristic each time we are reached
-    // with the current time since boot.
-    // here is where the client side logic is supposed to be at.... i think
     if (deviceConnected) {
-        Serial.println("Connected to other M5");
+        // 1 - Update the characteristic's value (which can  be read by a client)
+        // timer++;
+        // bleCharacteristic->setValue(timer);
+        // bleCharacteristic->notify();
+        // //bleCharacteristic->setNotifyProperty(true);
+        //Serial.printf("%d written to BLE characteristic.\n", timer);
 
-        // String newValue = "Time since boot: " + String(millis() / 1000);
-        // Serial.println("Setting new characteristic value to \"" + newValue + "\"");
+        // 2 - Read the characteristic's value as a string (which can be written from a client)
+        std::string readValue = bleCharacteristic->getValue();
+        Serial.printf("The new characteristic value as a STRING is: %s\n", readValue.c_str());
+        String valStr = readValue.c_str();
+        int val = valStr.toInt();
+        Serial.printf("The new characteristic value as an INT is: %d\n", val);
 
-        // Set the characteristic's value to be the array of bytes that is actually a string.
-        // this is where we send over when the client scores a point. We send the data that the client has made.
-        // pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
+        // 3 - Read the characteristic's value as a BYTE (which can be written from a client)
+        // uint8_t *numPtr = new uint8_t();
+        // numPtr = bleCharacteristic->getData();
+        // Serial.printf("The new characteristic value as a BYTE is: %d\n", *numPtr);
+
+        M5.Lcd.fillScreen(TFT_GREEN);
+        M5.Lcd.setCursor(0,0);
+        M5.Lcd.println(readValue.c_str());
+
 
         ///////////////////////////////////////////////////////////////
         // game logic to insert here
@@ -352,11 +270,16 @@ void loop()
         } else {
             M5.Lcd.fillScreen(OLIVE);
         }
-    }
-    else if (doScan)
-    {
-        BLEDevice::getScan()->start(0); // this is just eample to start scan after disconnect, most likely there is better way to do it in arduino
-    }
 
-    delay(1000); // Delay a second between loops.
+
+
+    } else {
+        timer = 0;
+        M5.Lcd.fillScreen(TFT_RED);
+        M5.Lcd.setCursor(0,0);
+        M5.Lcd.println("Disconnected");
+    }
+    
+    // Only update the timer (if connected) every 1 second
+    delay(1000);
 }
